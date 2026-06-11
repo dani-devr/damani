@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Damas Pro Online</title>
+    <!-- Socket.IO Cliente -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --danger: #ef4444;
+            --board-dark: #334155;
+            --board-light: #cbd5e1;
+            --piece-white: #f8fafc;
+            --piece-black: #111827;
+            --highlight: rgba(34, 197, 94, 0.6);
+            --selected: rgba(234, 179, 8, 0.8);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            padding: 20px;
+            display: none; /* Controlado via JS */
+            animation: fadeIn 0.3s ease;
+        }
+
+        .active-view { display: flex; flex-direction: column; gap: 20px; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Componentes Genéricos */
+        .card { background-color: var(--panel-bg); border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+        .title { font-size: 2rem; font-weight: bold; margin-bottom: 20px; text-align: center; color: var(--text-main); text-transform: uppercase; letter-spacing: 2px;}
+        
+        input { width: 100%; padding: 12px 16px; margin-bottom: 16px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; font-size: 1rem; transition: border 0.2s; }
+        input:focus { outline: none; border-color: var(--primary); }
+        
+        button { width: 100%; padding: 14px; border: none; border-radius: 8px; font-weight: bold; font-size: 1.1rem; cursor: pointer; transition: all 0.2s; background-color: var(--primary); color: white; text-transform: uppercase; }
+        button:hover { background-color: var(--primary-hover); transform: translateY(-2px); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        button.danger { background-color: var(--danger); }
+        button.danger:hover { background-color: #dc2626; }
+
+        /* Telas de Autenticação */
+        #auth-view { max-width: 400px; margin: 0 auto; }
+        .auth-switch { text-align: center; margin-top: 15px; color: var(--text-muted); cursor: pointer; font-size: 0.9rem; }
+        .auth-switch:hover { color: var(--primary); text-decoration: underline; }
+
+        /* Menu Principal */
+        .dashboard { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; }
+        @media (max-width: 768px) { .dashboard { grid-template-columns: 1fr; } }
+        .profile-stats { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #334155; padding-bottom: 10px; }
+        
+        .leaderboard-list { list-style: none; margin-top: 15px; }
+        .leaderboard-list li { display: flex; justify-content: space-between; padding: 12px; background: #0f172a; margin-bottom: 8px; border-radius: 6px; }
+        .leaderboard-list li:first-child { border-left: 4px solid gold; }
+        .leaderboard-list li:nth-child(2) { border-left: 4px solid silver; }
+        .leaderboard-list li:nth-child(3) { border-left: 4px solid #cd7f32; }
+
+        /* Interface de Jogo */
+        .game-layout { display: grid; grid-template-columns: 3fr 1fr; gap: 20px; max-width: 1000px; margin: 0 auto; }
+        @media (max-width: 900px) { .game-layout { grid-template-columns: 1fr; } }
+
+        .board-container { aspect-ratio: 1; background: var(--panel-bg); border-radius: 8px; border: 8px solid var(--panel-bg); display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); box-shadow: 0 10px 30px rgba(0,0,0,0.6); user-select: none; }
+        
+        .square { width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; position: relative; }
+        .square.dark { background-color: var(--board-dark); }
+        .square.light { background-color: var(--board-light); }
+        .square.valid-move { cursor: pointer; }
+        .square.valid-move::before { content: ''; width: 30%; height: 30%; background-color: var(--highlight); border-radius: 50%; position: absolute; z-index: 10; }
+
+        .piece { width: 80%; height: 80%; border-radius: 50%; box-shadow: 0 4px 6px rgba(0,0,0,0.4), inset 0 2px 4px rgba(255,255,255,0.2); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; position: relative; z-index: 5; }
+        .piece.white { background: radial-gradient(circle at 30% 30%, #fff, #94a3b8); border: 2px solid #64748b; }
+        .piece.black { background: radial-gradient(circle at 30% 30%, #475569, #0f172a); border: 2px solid #000; }
+        .piece.king::after { content: '👑'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.2rem; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.5)); }
+        
+        .piece.selectable:hover { transform: scale(1.1); box-shadow: 0 0 15px var(--primary); }
+        .piece.selected { border: 3px solid var(--selected); transform: scale(1.05); box-shadow: 0 0 20px var(--selected); }
+
+        .game-sidebar { display: flex; flex-direction: column; gap: 15px; }
+        .player-info { display: flex; flex-direction: column; align-items: center; padding: 15px; background: #0f172a; border-radius: 8px; border-left: 4px solid transparent; }
+        .player-info.active-turn { border-left-color: var(--primary); background: #1e293b; box-shadow: inset 0 0 10px rgba(59,130,246,0.2); }
+        .player-name { font-weight: bold; font-size: 1.2rem; }
+        .player-elo { font-size: 0.9rem; color: var(--text-muted); }
+        
+        .chat-box { flex-grow: 1; background: #0f172a; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; height: 300px;}
+        .chat-messages { flex-grow: 1; padding: 10px; overflow-y: auto; font-size: 0.9rem; display: flex; flex-direction: column; gap: 5px; }
+        .chat-input { display: flex; padding: 10px; background: var(--panel-bg); border-top: 1px solid #334155; }
+        .chat-input input { margin-bottom: 0; border-radius: 4px 0 0 4px; border: none; }
+        .chat-input button { width: 60px; border-radius: 0 4px 4px 0; padding: 10px; }
+        .msg-sys { color: var(--primary); font-style: italic; }
+        .msg-user span { font-weight: bold; color: #a78bfa; }
+
+        /* Modals / Overlays */
+        #matchmaking-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: none; justify-content: center; align-items: center; z-index: 1000; flex-direction: column; }
+        .spinner { width: 50px; height: 50px; border: 5px solid rgba(255,255,255,0.1); border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <!-- TELA DE AUTENTICAÇÃO -->
+    <div id="auth-view" class="container active-view">
+        <div class="card">
+            <h1 class="title" id="auth-title">Entrar</h1>
+            <input type="text" id="username" placeholder="Usuário" autocomplete="off">
+            <input type="password" id="password" placeholder="Senha">
+            <button id="auth-btn" onclick="handleAuth()">Login</button>
+            <div class="auth-switch" onclick="toggleAuthMode()">Não tem conta? Registre-se</div>
+            <p id="auth-error" style="color: var(--danger); text-align: center; margin-top: 10px; display: none;"></p>
+        </div>
+    </div>
+
+    <!-- MENU PRINCIPAL -->
+    <div id="menu-view" class="container">
+        <div class="title">Damas Pro Online</div>
+        <div class="dashboard">
+            <div class="card">
+                <h2 style="margin-bottom: 20px;">Seu Perfil</h2>
+                <div class="profile-stats"><span>Jogador:</span> <strong id="lbl-username">...</strong></div>
+                <div class="profile-stats"><span>Rating ELO:</span> <strong id="lbl-elo" style="color: gold;">...</strong></div>
+                <div class="profile-stats"><span>Vitórias:</span> <strong id="lbl-wins" style="color: #4ade80;">...</strong></div>
+                <div class="profile-stats"><span>Derrotas:</span> <strong id="lbl-losses" style="color: #ef4444;">...</strong></div>
+                
+                <button style="margin-top: 30px; height: 60px; font-size: 1.3rem;" onclick="findMatch()">🏆 JOGAR RANKED</button>
+                <button class="danger" style="margin-top: 15px;" onclick="logout()">Sair</button>
+            </div>
+            <div class="card">
+                <h2 style="margin-bottom: 20px;">Top 10 Global</h2>
+                <ul class="leaderboard-list" id="leaderboard">
+                    <li>Carregando...</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- TELA DO JOGO -->
+    <div id="game-view" class="container">
+        <div class="game-layout">
+            <div class="board-container" id="board">
+                <!-- Tabuleiro renderizado via JS -->
+            </div>
+            
+            <div class="game-sidebar">
+                <div class="card" style="padding: 10px;">
+                    <div id="player-top" class="player-info">
+                        <div class="player-name">Oponente</div>
+                        <div class="player-elo">ELO: ---</div>
+                    </div>
+                    <div style="text-align: center; margin: 15px 0; font-weight: bold; color: var(--text-muted);">VS</div>
+                    <div id="player-bottom" class="player-info">
+                        <div class="player-name">Você</div>
+                        <div class="player-elo">ELO: ---</div>
+                    </div>
+                </div>
+
+                <div class="chat-box">
+                    <div class="chat-messages" id="chat-msgs"></div>
+                    <div class="chat-input">
+                        <input type="text" id="chat-input" placeholder="Mensagem..." onkeypress="if(event.key==='Enter') sendChat()">
+                        <button onclick="sendChat()">Enviar</button>
+                    </div>
+                </div>
+                
+                <button class="danger" onclick="abandonGame()">Abandonar Partida</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- OVERLAY MATCHMAKING -->
+    <div id="matchmaking-overlay">
+        <div class="spinner"></div>
+        <h2 style="color: white; margin-bottom: 20px;">Procurando oponente...</h2>
+        <button class="danger" style="width: 200px;" onclick="cancelMatchmaking()">Cancelar</button>
+    </div>
+
+    <script>
+        // ==========================================
+        // CONFIGURAÇÕES GERAIS E ESTADO
+        // ==========================================
+        const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:3000/api' : '/api';
+        let socket;
+        let isRegistering = false;
+        let currentUser = null;
+        
+        // Estado da Partida
+        let myColor = null;
+        let currentBoard = [];
+        let currentTurn = 'white';
+        let selectedPiece = null;
+        let validMovesCache = []; // Movimentos válidos para a peça selecionada
+
+        // Constantes do Board
+        const EMPTY = 0, WHITE = 1, BLACK = 2, WHITE_KING = 3, BLACK_KING = 4;
+
+        // ==========================================
+        // INICIALIZAÇÃO
+        // ==========================================
+        window.onload = () => {
+            const token = localStorage.getItem('token');
+            if (token) {
+                // Simula login rápido
+                currentUser = { username: localStorage.getItem('username'), token };
+                connectSocket();
+            }
+        };
+
+        function switchView(viewId) {
+            document.querySelectorAll('.container').forEach(c => c.classList.remove('active-view'));
+            document.getElementById(viewId).classList.add('active-view');
+        }
+
+        // ==========================================
+        // AUTENTICAÇÃO E REST
+        // ==========================================
+        function toggleAuthMode() {
+            isRegistering = !isRegistering;
+            document.getElementById('auth-title').innerText = isRegistering ? 'Criar Conta' : 'Entrar';
+            document.getElementById('auth-btn').innerText = isRegistering ? 'Registrar' : 'Login';
+            document.querySelector('.auth-switch').innerText = isRegistering ? 'Já tem conta? Faça Login' : 'Não tem conta? Registre-se';
+            document.getElementById('auth-error').style.display = 'none';
+        }
+
+        async function handleAuth() {
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+            const endpoint = isRegistering ? '/register' : '/login';
+
+            try {
+                const res = await fetch(`${API_URL}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: user, password: pass })
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    localStorage.setItem('token', data.token);
+                    localStorage.setItem('username', data.username);
+                    currentUser = data;
+                    connectSocket();
+                } else {
+                    showError(data.error);
+                }
+            } catch (e) {
+                showError('Erro de conexão com o servidor.');
+            }
+        }
+
+        function showError(msg) {
+            const el = document.getElementById('auth-error');
+            el.innerText = msg;
+            el.style.display = 'block';
+        }
+
+        function logout() {
+            localStorage.clear();
+            currentUser = null;
+            if(socket) socket.disconnect();
+            switchView('auth-view');
+        }
+
+        async function loadDashboard() {
+            // Atualiza UI local
+            document.getElementById('lbl-username').innerText = currentUser.username;
+            document.getElementById('lbl-elo').innerText = currentUser.elo || 1000;
+            document.getElementById('lbl-wins').innerText = currentUser.wins || 0;
+            document.getElementById('lbl-losses').innerText = currentUser.losses || 0;
+
+            // Busca Leaderboard
+            try {
+                const res = await fetch(`${API_URL}/leaderboard`);
+                const rank = await res.json();
+                const list = document.getElementById('leaderboard');
+                list.innerHTML = rank.map((p, i) => `
+                    <li>
+                        <span><b>#${i+1}</b> ${p.username}</span>
+                        <span style="color: gold; font-weight: bold;">${p.elo} ELO</span>
+                    </li>
+                `).join('');
+            } catch (e) { console.error('Erro no ranking'); }
+            
+            switchView('menu-view');
+        }
+
+        // ==========================================
+        // SOCKET.IO E MULTIPLAYER
+        // ==========================================
+        function connectSocket() {
+            // Usar mesma URL base do site, pois o socket e servidor rodam juntos
+            socket = io({ auth: { token: currentUser.token } });
+
+            socket.on('connect', () => {
+                loadDashboard();
+            });
+
+            socket.on('connect_error', (err) => {
+                logout();
+                alert("Sessão expirada ou erro de servidor.");
+            });
+
+            socket.on('game_start', (data) => {
+                document.getElementById('matchmaking-overlay').style.display = 'none';
+                setupGameEnv(data);
+                switchView('game-view');
+            });
+
+            socket.on('update_board', (data) => {
+                currentBoard = data.board;
+                currentTurn = data.turn;
+                validMovesCache = []; // Limpa cache
+                selectedPiece = null;
+                renderBoard();
+                updateTurnUI();
+            });
+
+            socket.on('invalid_move', (data) => {
+                currentBoard = data.board; // Restaura estado real do servidor
+                selectedPiece = null;
+                renderBoard();
+            });
+
+            socket.on('game_over', (data) => {
+                alert(`Fim de Jogo! Vencedor: ${data.winner}`);
+                switchView('menu-view');
+                loadDashboard(); // Atualiza ELO
+            });
+
+            socket.on('chat_message', (msg) => {
+                const box = document.getElementById('chat-msgs');
+                box.innerHTML += `<div class="msg-user"><span>${msg.sender}:</span> ${msg.text}</div>`;
+                box.scrollTop = box.scrollHeight;
+            });
+        }
+
+        function findMatch() {
+            document.getElementById('matchmaking-overlay').style.display = 'flex';
+            socket.emit('find_match');
+        }
+
+        function cancelMatchmaking() {
+            // Recarregar a página para abortar (simples)
+            window.location.reload(); 
+        }
+
+        // ==========================================
+        // LÓGICA DO TABULEIRO (CLIENTE)
+        // ==========================================
+        function setupGameEnv(data) {
+            currentBoard = data.board;
+            currentTurn = data.turn;
+            myColor = data.white.username === currentUser.username ? 'white' : 'black';
+            
+            // Configurar UI Jogadores
+            const top = document.getElementById('player-top');
+            const bot = document.getElementById('player-bottom');
+            
+            let opp = myColor === 'white' ? data.black : data.white;
+            let me = myColor === 'white' ? data.white : data.black;
+
+            top.querySelector('.player-name').innerText = opp.username;
+            top.querySelector('.player-elo').innerText = `ELO: ${opp.elo}`;
+            bot.querySelector('.player-name').innerText = me.username;
+            bot.querySelector('.player-elo').innerText = `ELO: ${me.elo} (Cor: ${myColor === 'white' ? 'Branca' : 'Preta'})`;
+
+            document.getElementById('chat-msgs').innerHTML = '<div class="msg-sys">Partida iniciada! Boa sorte.</div>';
+            
+            renderBoard();
+            updateTurnUI();
+        }
+
+        function updateTurnUI() {
+            const top = document.getElementById('player-top');
+            const bot = document.getElementById('player-bottom');
+            
+            if (currentTurn === myColor) {
+                bot.classList.add('active-turn');
+                top.classList.remove('active-turn');
+            } else {
+                top.classList.add('active-turn');
+                bot.classList.remove('active-turn');
+            }
+        }
+
+        // Simulação básica de regras no cliente APENAS PARA FEEDBACK VISUAL.
+        // A fonte da verdade sempre será o servidor.
+        function getClientValidMoves(r, c, piece) {
+            let moves = [];
+            let isKing = piece === WHITE_KING || piece === BLACK_KING;
+            let forward = myColor === 'white' ? -1 : 1; // Brancas sobem (-1), Pretas descem (+1)
+            
+            // Movimentos simples (apenas para evitar clicar à toa. A validação estrita real é lá.)
+            let dirs = [[forward, -1], [forward, 1]]; 
+            if (isKing) dirs.push([-forward, -1], [-forward, 1]); // Reis andam pra trás
+            
+            // Pulos (MUITO SIMPLIFICADO NO CLIENTE, apenas para highlight)
+            for (let [dr, dc] of dirs) {
+                let nr = r + dr, nc = c + dc;
+                if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && currentBoard[nr][nc] === EMPTY) {
+                    moves.push({ r: nr, c: nc });
+                }
+                
+                let jr = r + 2*dr, jc = c + 2*dc;
+                if (jr >= 0 && jr < 8 && jc >= 0 && jc < 8) {
+                    if (currentBoard[nr][nc] !== EMPTY && currentBoard[nr][nc] !== piece && currentBoard[jr][jc] === EMPTY) {
+                        moves.push({ r: jr, c: jc }); // Highlight de pulo
+                    }
+                }
+            }
+            return moves;
+        }
+
+        function handleSquareClick(r, c) {
+            if (currentTurn !== myColor) return; // Não é sua vez
+
+            const piece = currentBoard[r][c];
+            const isMyPiece = (myColor === 'white' && (piece === WHITE || piece === WHITE_KING)) || 
+                              (myColor === 'black' && (piece === BLACK || piece === BLACK_KING));
+
+            // Selecionar Peça
+            if (isMyPiece) {
+                selectedPiece = { r, c };
+                validMovesCache = getClientValidMoves(r, c, piece);
+                renderBoard();
+                return;
+            }
+
+            // Tentar mover
+            if (selectedPiece && currentBoard[r][c] === EMPTY) {
+                // Verificar se o clique foi num quadrado destacado (cache local)
+                const isValidTarget = validMovesCache.some(m => m.r === r && m.c === c);
+                if (isValidTarget) {
+                    // Envia pro servidor validar e aplicar
+                    socket.emit('make_move', { 
+                        from: selectedPiece, 
+                        to: { r, c } 
+                    });
+                    
+                    // Previsão otimista para UI ficar responsiva
+                    currentBoard[r][c] = currentBoard[selectedPiece.r][selectedPiece.c];
+                    currentBoard[selectedPiece.r][selectedPiece.c] = EMPTY;
+                    selectedPiece = null;
+                    validMovesCache = [];
+                    renderBoard();
+                }
+            }
+        }
+
+        function renderBoard() {
+            const boardEl = document.getElementById('board');
+            boardEl.innerHTML = '';
+            
+            // Se jogar de pretas, inverter a visualização do tabuleiro (opcional, mas recomendado)
+            const reverse = myColor === 'white'; 
+            
+            for (let visualR = 0; visualR < 8; visualR++) {
+                for (let visualC = 0; visualC < 8; visualC++) {
+                    
+                    let r = reverse ? visualR : 7 - visualR;
+                    let c = reverse ? visualC : 7 - visualC;
+
+                    const isDark = (r + c) % 2 !== 0;
+                    const sq = document.createElement('div');
+                    sq.className = `square ${isDark ? 'dark' : 'light'}`;
+                    
+                    // Highlight de movimento válido
+                    const isMoveTarget = validMovesCache.some(m => m.r === r && m.c === c);
+                    if (isMoveTarget) sq.classList.add('valid-move');
+
+                    sq.onclick = () => handleSquareClick(r, c);
+
+                    // Renderizar Peça
+                    const cellVal = currentBoard[r][c];
+                    if (cellVal !== EMPTY) {
+                        const pieceEl = document.createElement('div');
+                        pieceEl.className = 'piece';
+                        if (cellVal === WHITE || cellVal === WHITE_KING) pieceEl.classList.add('white');
+                        if (cellVal === BLACK || cellVal === BLACK_KING) pieceEl.classList.add('black');
+                        if (cellVal === WHITE_KING || cellVal === BLACK_KING) pieceEl.classList.add('king');
+                        
+                        const isMyPiece = (myColor === 'white' && (cellVal === WHITE || cellVal === WHITE_KING)) || 
+                                          (myColor === 'black' && (cellVal === BLACK || cellVal === BLACK_KING));
+                        
+                        if (isMyPiece && currentTurn === myColor) pieceEl.classList.add('selectable');
+                        
+                        if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
+                            pieceEl.classList.add('selected');
+                        }
+
+                        sq.appendChild(pieceEl);
+                    }
+                    boardEl.appendChild(sq);
+                }
+            }
+        }
+
+        // ==========================================
+        // CHAT E UTILIDADES
+        // ==========================================
+        function sendChat() {
+            const input = document.getElementById('chat-input');
+            const msg = input.value.trim();
+            if (msg.length > 0) {
+                socket.emit('send_chat', msg);
+                input.value = '';
+            }
+        }
+
+        function abandonGame() {
+            if(confirm("Tem certeza que deseja abandonar? Você perderá pontos de ELO.")) {
+                window.location.reload(); // Vai desconectar e forçar a derrota
+            }
+        }
+    </script>
+</body>
+</html>
