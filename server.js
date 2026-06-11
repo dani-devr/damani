@@ -1,7 +1,6 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
@@ -22,25 +21,10 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
-// BANCO DE DADOS (SQLite)
+// BANCO DE DADOS EM MEMÓRIA (Sem SQLite)
 // ==========================================
-const db = new sqlite3.Database('./database.sqlite', (err) => {
-    if (err) console.error('Erro ao conectar ao SQLite:', err.message);
-    else console.log('Conectado ao banco de dados SQLite.');
-});
-
-db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        elo INTEGER DEFAULT 1000,
-        wins INTEGER DEFAULT 0,
-        losses INTEGER DEFAULT 0,
-        draws INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-});
+const users = {}; // Guarda os usuários temporariamente na memória RAM
+let nextUserId = 1;
 
 // ==========================================
 // ROTAS DE AUTENTICAÇÃO E PERFIL (REST API)
@@ -50,32 +34,49 @@ app.post('/api/register', async (req, res) => {
     if (!username || !password || username.length < 3 || password.length < 6) {
         return res.status(400).json({ error: 'Dados inválidos. Username > 2 e Senha > 5.' });
     }
+    
+    if (users[username]) {
+        return res.status(400).json({ error: 'Username já existe.' });
+    }
+    
     try {
         const hash = await bcrypt.hash(password, 10);
-        db.run(`INSERT INTO users (username, password) VALUES (?, ?)`, [username, hash], function(err) {
-            if (err) return res.status(400).json({ error: 'Username já existe.' });
-            const token = jwt.sign({ id: this.lastID, username }, JWT_SECRET);
-            res.json({ token, username, elo: 1000 });
-        });
-    } catch (e) { res.status(500).json({ error: 'Erro no servidor' }); }
+        const newUser = {
+            id: nextUserId++,
+            username,
+            password: hash,
+            elo: 1000,
+            wins: 0,
+            losses: 0
+        };
+        users[username] = newUser;
+        
+        const token = jwt.sign({ id: newUser.id, username }, JWT_SECRET);
+        res.json({ token, username, elo: 1000 });
+    } catch (e) { 
+        res.status(500).json({ error: 'Erro no servidor' }); 
+    }
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
-    db.get(`SELECT * FROM users WHERE username = ?`, [username], async (err, user) => {
-        if (err || !user) return res.status(400).json({ error: 'Usuário não encontrado.' });
-        const valid = await bcrypt.compare(password, user.password);
-        if (!valid) return res.status(400).json({ error: 'Senha incorreta.' });
-        const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET);
-        res.json({ token, username: user.username, elo: user.elo, wins: user.wins, losses: user.losses });
-    });
+    const user = users[username];
+    
+    if (!user) return res.status(400).json({ error: 'Usuário não encontrado.' });
+    
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(400).json({ error: 'Senha incorreta.' });
+    
+    const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET);
+    res.json({ token, username: user.username, elo: user.elo, wins: user.wins, losses: user.losses });
 });
 
 app.get('/api/leaderboard', (req, res) => {
-    db.all(`SELECT username, elo, wins, losses FROM users ORDER BY elo DESC LIMIT 10`, [], (err, rows) => {
-        if (err) return res.status(500).json({ error: 'Erro ao buscar ranking' });
-        res.json(rows);
-    });
+    const leaderboard = Object.values(users)
+        .sort((a, b) => b.elo - a.elo)
+        .slice(0, 10)
+        .map(u => ({ username: u.username, elo: u.elo, wins: u.wins, losses: u.losses }));
+    res.json(leaderboard);
 });
 
 // ==========================================
@@ -176,16 +177,15 @@ async function handleGameEnd(roomId, winnerColor) {
     const room = rooms[roomId];
     if (!room) return;
     
-    let winnerId = winnerColor === 'white' ? room.players.white.id : room.players.black.id;
-    let loserId = winnerColor === 'white' ? room.players.black.id : room.players.white.id;
+    let winnerName = winnerColor === 'white' ? room.players.white.username : room.players.black.username;
+    let loserName = winnerColor === 'white' ? room.players.black.username : room.players.white.username;
 
-    // Buscar no DB e atualizar
-    db.get(`SELECT id, elo, wins, losses FROM users WHERE id IN (?, ?)`, [winnerId, loserId], (err, rows) => {
-        // Lógica simplificada: Atualizar DB real na produção.
-        // Simulando a atualização rápida para enviar para o frontend
-        io.to(roomId).emit('game_over', { winner: winnerColor, message: 'Partida finalizada!' });
-        delete rooms[roomId];
-    });
+    // Atualizar stats em memória apenas para a sessão atual
+    if (users[winnerName]) users[winnerName].wins++;
+    if (users[loserName]) users[loserName].losses++;
+
+    io.to(roomId).emit('game_over', { winner: winnerColor, message: 'Partida finalizada!' });
+    delete rooms[roomId];
 }
 
 // ==========================================
@@ -204,9 +204,13 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
     console.log(`Usuário conectado: ${socket.user.username}`);
     
-    db.get(`SELECT elo FROM users WHERE id = ?`, [socket.user.id], (err, row) => {
-        connectedUsers[socket.id] = { id: socket.user.id, username: socket.user.username, elo: row?.elo || 1000, socketId: socket.id };
-    });
+    const memUser = users[socket.user.username];
+    connectedUsers[socket.id] = { 
+        id: socket.user.id, 
+        username: socket.user.username, 
+        elo: memUser ? memUser.elo : 1000, 
+        socketId: socket.id 
+    };
 
     // SISTEMA DE MATCHMAKING (RANKED)
     socket.on('find_match', () => {
