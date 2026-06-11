@@ -31,8 +31,8 @@ let nextUserId = 1;
 // ==========================================
 app.post('/api/register', async (req, res) => {
     const { username, password } = req.body;
-    if (!username || !password || username.length < 3 || password.length < 6) {
-        return res.status(400).json({ error: 'Dados inválidos. Username > 2 e Senha > 5.' });
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Preencha usuário e senha.' });
     }
     
     if (users[username]) {
